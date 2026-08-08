@@ -180,6 +180,7 @@ DEFAULT_CONFIG = {
     "cloudflare_path_accounts": "/api/new_address",
     "cloudflare_path_token": "/api/token",
     "cloudflare_path_messages": "/api/mails",
+    "cloudflare_enable_random_subdomain": True,
     "outlookemail_api_base": "",
     "outlookemail_api_key": "",
     "outlookemail_source": "accounts",
@@ -697,7 +698,7 @@ def cloudflare_create_temp_address(api_base):
         auth_mode=get_cloudflare_auth_mode(),
         custom_auth=get_cloudflare_custom_auth(),
         name=generate_username(10),
-        random_subdomain=True,
+        random_subdomain=bool(config.get("cloudflare_enable_random_subdomain", True)),
     )
 
 

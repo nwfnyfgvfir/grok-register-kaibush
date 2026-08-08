@@ -448,6 +448,14 @@ export function SettingsPage({ section = "registration" }: { section?: SettingsS
                 </div>
                 <ConfigField {...fieldState} label="全局访问密码" field="cloudflare_custom_auth" type="password" helper="对应 Worker PASSWORDS，发送到 X-Custom-Auth" />
                 <ConfigField {...fieldState} label="收信域名" field="defaultDomains" helper="多个域名可用逗号或空格分隔" />
+                <div className="sm:col-span-2">
+                  <ToggleRow
+                    title="启用随机子域名"
+                    description="创建临时邮箱时自动生成随机二级子域名（参考 cloudflare_temp_email 的 enableRandomSubdomain）"
+                    checked={!!config.cloudflare_enable_random_subdomain}
+                    onCheckedChange={(value) => setField("cloudflare_enable_random_subdomain", value)}
+                  />
+                </div>
                 <ConfigField {...fieldState} label="域名接口路径" field="cloudflare_path_domains" />
                 <ConfigField {...fieldState} label="创建邮箱接口路径" field="cloudflare_path_accounts" />
                 <ConfigField {...fieldState} label="获取 Token 接口路径" field="cloudflare_path_token" />
