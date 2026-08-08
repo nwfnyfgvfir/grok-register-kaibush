@@ -276,6 +276,7 @@ export function SettingsPage({ section = "registration" }: { section?: SettingsS
               </Link>
             </div>
             <ConfigField {...fieldState} label="网络代理" field="proxy" placeholder="http://127.0.0.1:7890" />
+            <ConfigField {...fieldState} label="代理占位符" field="proxy_placeholder" placeholder=".xxx" helper="如 .xxx 或 {id}，注册时替换为账号唯一标识" />
             <ConfigField {...fieldState}
               label="账号间隔（秒）"
               field="account_interval"

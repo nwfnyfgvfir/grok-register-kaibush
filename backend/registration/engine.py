@@ -192,7 +192,8 @@ DEFAULT_CONFIG = {
     "outlookemail_top": 10,
     "outlookemail_pick_mode": "random",
     "outlookemail_disable_after_cpa_success": False,
-    "proxy": "http://127.0.0.1:7890",
+    "proxy": "http://Default.xxx:pass@127.0.0.1:2260",
+    "proxy_placeholder": ".xxx",
     "enable_nsfw": True,
     "debug_mode": False,
     "browser_headless": False,
@@ -544,6 +545,19 @@ def load_config():
     return config
 
 
+
+
+def generate_account_identifier(email: str) -> str:
+    """Generate unique identifier for proxy placeholder replacement per account.
+    Uses email hash for consistency across retries/SSO flows.
+    """
+    if not email:
+        import secrets
+        return secrets.token_hex(8)
+    import hashlib
+    return hashlib.sha256(email.encode("utf-8")).hexdigest()[:16]
+
+
 def parse_account_interval() -> float:
     """解析 account_interval 配置，返回等待秒数。
 
@@ -586,8 +600,10 @@ EXTENSION_PATH = ""
 DUCKMAIL_API_BASE_DEFAULT = duckmail_provider.API_BASE_DEFAULT
 
 
-def get_proxies():
-    proxy = resolve_proxy_url(config.get("proxy", ""))
+def get_proxies(email: str = ""):
+    identifier = generate_account_identifier(email) if email else ""
+    placeholder = str(config.get("proxy_placeholder", ".xxx") or ".xxx")
+    proxy = resolve_proxy_url(config.get("proxy", ""), identifier, placeholder)
     if proxy:
         return {"http": proxy, "https": proxy}
     return {}
@@ -633,12 +649,14 @@ def get_duckmail_api_key():
 
 
 
+
 def get_cloudflare_api_base():
     return str(config.get("cloudflare_api_base", "") or "").rstrip("/")
 
 
 def get_cloudflare_api_key():
     return config.get("cloudflare_api_key", "")
+
 
 
 def get_cloudflare_auth_mode():
@@ -961,6 +979,7 @@ def outlookemail_get_oai_code(
 
 def get_user_agent():
     return config.get(
+
         "user_agent",
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36",
     )
@@ -973,9 +992,11 @@ def _normalize_sso_token(raw_token):
     return token
 
 
-def _resolve_cpa_proxy():
+def _resolve_cpa_proxy(email: str = ""):
     """CPA 换 token 用的代理：优先 config.proxy，其次环境变量，否则直连。"""
-    proxy = resolve_proxy_url(config.get("proxy", ""))
+    identifier = generate_account_identifier(email) if email else ""
+    placeholder = str(config.get("proxy_placeholder", ".xxx") or ".xxx")
+    proxy = resolve_proxy_url(config.get("proxy", ""), identifier, placeholder)
     if proxy:
         return proxy
     for key in ("https_proxy", "HTTPS_PROXY", "http_proxy", "HTTP_PROXY"):
@@ -1031,7 +1052,7 @@ def ensure_sso_oauth_eligible(raw_token, email="", log_callback=None) -> dict:
             log_callback(f"[CPA] {str(message).strip()}")
 
     retry_delays = (0, 2, 4, 8)
-    proxy = _resolve_cpa_proxy()
+    proxy = _resolve_cpa_proxy(email)
     last_state = {}
 
     for attempt, delay in enumerate(retry_delays, start=1):
@@ -1148,7 +1169,7 @@ def add_sso_to_cpa(raw_token, email="", log_callback=None, result_out=None) -> b
     if not sso:
         _set_result(status="failed", error="SSO 为空")
         return False
-    proxy = _resolve_cpa_proxy()
+    proxy = _resolve_cpa_proxy(email)
 
     def _cpa_log(message):
         if log_callback:
@@ -1202,7 +1223,7 @@ def add_sso_to_cpa(raw_token, email="", log_callback=None, result_out=None) -> b
             _cpa_log("换 token 失败；SSO 已在 accounts 文件，稍后可重转")
             _append_sso_pending(email, sso, log_callback=log_callback)
             return False
-        record = _s2cpa.token_to_cpa_record(token, email=email, sso=sso)
+        record = _s2cpa.token_to_cpa_record(token, email=email, sso=sso, proxy_url=proxy)
         ap = _s2cpa.decode_jwt_payload(record.get("access_token", ""))
         ref = ap.get("referrer")
         if ref:
@@ -1506,8 +1527,10 @@ def get_yyds_api_key():
     return config.get("yyds_api_key", "")
 
 
+
 def get_yyds_jwt():
     return config.get("yyds_jwt", "")
+
 
 
 def get_yyds_default_domain():
@@ -1658,6 +1681,7 @@ def cloudmail_get_oai_code(
 
 def get_email_provider():
     return config.get("email_provider", "cloudflare")
+
 
 
 def get_email_and_token(api_key=None):

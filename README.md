@@ -162,7 +162,8 @@ Windows 启动：
 | `email_provider` | 邮箱服务商 |
 | `register_count` | 注册数量 |
 | `register_workers` | 并发数量，默认 1 |
-| `proxy` | 注册和 OAuth 请求使用的代理 |
+| `proxy` | 注册和 OAuth 请求使用的代理。支持 `.xxx` 占位符（如 `http://Default.xxx:pass@127.0.0.1:2260`），注册时自动替换为账号唯一标识 |
+| `proxy_placeholder` | 代理占位符，默认 `.xxx` |
 | `browser_headless` | 本机无头模式；Docker 中强制关闭 |
 | `cpa_auto_add` | 注册后生成 CPA 授权 |
 | `cpa_auth_dir` | CPA JSON 保存目录 |

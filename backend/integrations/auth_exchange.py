@@ -1151,7 +1151,7 @@ def _safe_email_for_filename(email: str) -> str:
     return safe or "unknown"
 
 
-def token_to_cpa_record(token: dict, email: str = "", sso: str = "") -> dict:
+def token_to_cpa_record(token: dict, email: str = "", sso: str = "", proxy_url: str = "") -> dict:
     """token dict → CLIProxyAPI 扁平 xai auth 记录。
 
     对齐 CPA internal/auth/xai/token.go 的 TokenStorage 字段，以及
@@ -1198,6 +1198,9 @@ def token_to_cpa_record(token: dict, email: str = "", sso: str = "") -> dict:
     sso_val = str(sso or "").strip()
     if sso_val:
         record["sso"] = sso_val
+    # Always include proxy_url (per-account unique proxy for CPA)
+    if proxy_url:
+        record["proxy_url"] = str(proxy_url).strip()
     return record
 
 
