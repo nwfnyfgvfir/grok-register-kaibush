@@ -70,10 +70,10 @@ class DockerProxyResolutionTests(unittest.TestCase):
             self.assertEqual(
                 resolve_proxy_url(
                     "http://Default.xxx:pass@127.0.0.1:2260",
-                    identifier="probe",
+                    identifier=secrets.token_hex(8),
                     placeholder=".xxx",
                 ),
-                "http://Default.probe:pass@127.0.0.1:2260",
+                f"http://Default.{secrets.token_hex(8)}:pass@127.0.0.1:2260",
             )
 
     def test_xxxx_fallback_when_placeholder_is_xxx(self):

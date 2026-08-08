@@ -2428,13 +2428,22 @@ def run_registration(count):
     registration_log(f"[*] SSO→auth: {'开' if config.get('cpa_auto_add') else '关（账号将不计成功）'}" + (f"（{_token_mode_label}）" if config.get('cpa_auto_add') else ""))
     traceback_log_lock = threading.Lock()
     logged_traceback_signatures = set()
+    # 启动前最先分配实时代理标识：probe 与首个账号共用同一 sticky id
+    probe_proxy_id = allocate_proxy_identifier()
+    probe_resolved = _resolve_cpa_proxy()
+    registration_log(
+        f"[*] 代理标识: {probe_proxy_id}"
+        + (f" → {_mask_proxy_for_log(probe_resolved)}" if probe_resolved else " → 直连")
+    )
     # 启动前清理上次崩溃 / 强杀残留的临时 profile 目录
     try:
         _cleanup_stale_profiles(log_callback=registration_log)
     except Exception:
         pass
     try:
-        startup_checks = _conn.run_connectivity_checks(config, http_get, http_post)
+        startup_checks = _conn.run_connectivity_checks(
+            config, http_get, http_post, identifier=probe_proxy_id
+        )
         for name, ok, detail in startup_checks:
             registration_log(f"[检查] [{'OK' if ok else 'FAIL'}] {name}: {detail}")
         if _conn.has_blocking_xai_failure(startup_checks):
@@ -2506,6 +2515,13 @@ def run_registration(count):
             local_fail_stats = empty_fail_stats()
             try:
                 boot_started_at = time.time()
+                # 浏览器启动前先分配实时标识（worker 线程独立 thread-local）
+                proxy_id = allocate_proxy_identifier()
+                resolved = _resolve_cpa_proxy()
+                registration_log(
+                    f"[W{wid+1}] [*] 代理标识: {proxy_id}"
+                    + (f" → {_mask_proxy_for_log(resolved)}" if resolved else " → 直连")
+                )
                 try:
                     start_browser(log_callback=lambda m: registration_log(f"[W{wid+1}] {m}"))
                 except Exception as boot_exc:
@@ -2539,21 +2555,17 @@ def run_registration(count):
                     }
                     nsfw_status = "未执行"
                     try:
-                        # Allocate sticky proxy id before browser traffic for this attempt.
-                        proxy_id = allocate_proxy_identifier()
+                        # 每轮账号：若上一轮 finally 已 clear，则重新分配；首轮复用 boot 标识
+                        existing = current_proxy_identifier()
+                        if existing:
+                            proxy_id = existing
+                        else:
+                            proxy_id = allocate_proxy_identifier()
                         resolved = _resolve_cpa_proxy()
                         registration_log(
                             f"[W{wid+1}] [*] 代理标识: {proxy_id}"
                             + (f" → {_mask_proxy_for_log(resolved)}" if resolved else " → 直连")
                         )
-                        # Boot start_browser may have launched without id; force restart
-                        # so Camoufox picks up the attempt-specific proxy.
-                        if _active_browser() is not None:
-                            try:
-                                stop_browser()
-                                time.sleep(0.2)
-                            except Exception:
-                                pass
                         open_signup_page(
                             log_callback=lambda m: registration_log(f"[W{wid+1}] {m}"),
                             cancel_callback=controller.should_stop,
@@ -2825,6 +2837,14 @@ def run_registration(count):
 
     try:
         boot_started_at = time.time()
+        # 浏览器启动前确保已有实时标识（与 probe 共用主线程 thread-local）
+        if not current_proxy_identifier():
+            proxy_id = allocate_proxy_identifier()
+            resolved = _resolve_cpa_proxy()
+            registration_log(
+                f"[*] 代理标识: {proxy_id}"
+                + (f" → {_mask_proxy_for_log(resolved)}" if resolved else " → 直连")
+            )
         try:
             start_browser(log_callback=registration_log)
         except Exception as boot_exc:
@@ -2860,22 +2880,18 @@ def run_registration(count):
             }
             nsfw_status = "未执行"
             try:
-                # Allocate sticky proxy id once per account attempt (before browser).
-                # Mail retries reuse the same id so sticky proxy stays stable.
-                proxy_id = allocate_proxy_identifier()
+                # 每轮账号：首轮复用 probe/boot 实时标识；后续轮次重新分配 sticky id
+                # 同一轮内 mail 重试复用同一 id，保证出口稳定。
+                existing = current_proxy_identifier()
+                if existing:
+                    proxy_id = existing
+                else:
+                    proxy_id = allocate_proxy_identifier()
                 resolved = _resolve_cpa_proxy()
                 registration_log(
                     f"[*] 代理标识: {proxy_id}"
                     + (f" → {_mask_proxy_for_log(resolved)}" if resolved else " → 直连")
                 )
-                # Boot start_browser may have launched without id; force restart
-                # so Camoufox picks up the attempt-specific proxy.
-                if _active_browser() is not None:
-                    try:
-                        stop_browser()
-                        time.sleep(0.2)
-                    except Exception:
-                        pass
                 dev_token = ""
                 code = ""
                 mail_ok = False
