@@ -22,15 +22,18 @@ def resolve_proxy_url(proxy_url: str, identifier: str = "", placeholder: str = "
         return value
 
     # Replace identifier placeholder for per-account unique proxy.
-    # Handle both .xxx and {id} styles, and ensure correct leading dot.
+    # Prefer longer match first so .xxx inside .xxxx is not partially replaced.
     if identifier:
         ph = str(placeholder or ".xxx").strip() or ".xxx"
-        if ph == ".xxx":
-            value = value.replace(".xxx", f".{identifier}")
-        elif ph == "{id}":
+        replacement = f".{identifier}" if ph.startswith(".") else identifier
+        # Prefer explicit longer patterns before the configured placeholder,
+        # so ".xxx" does not partially rewrite ".xxxx".
+        if "{id}" in value:
             value = value.replace("{id}", identifier)
+        elif ".xxxx" in value and (ph in (".xxx", ".xxxx") or ph not in value):
+            value = value.replace(".xxxx", f".{identifier}")
         elif ph in value:
-            value = value.replace(ph, f".{identifier}")
+            value = value.replace(ph, replacement)
         elif ".xxx" in value:
             value = value.replace(".xxx", f".{identifier}")
 

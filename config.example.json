@@ -24,6 +24,11 @@
   "outlookemail_folder": "all",
   "outlookemail_top": 10,
   "outlookemail_disable_after_cpa_success": false,
+	  "proxies": [
+	    "http://user:pass@127.0.0.1:7890",
+	    "socks5://user:pass@127.0.0.1:1080",
+	    "http://Default.xxx:pass@proxy.koyeb.app:443"
+	  ],
   "proxy": "http://Default.xxx:pass@127.0.0.1:2260",
   "proxy_placeholder": ".xxx",
   "enable_nsfw": true,

@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import secrets
 import socket
 import time
 from typing import Callable, List, Tuple
@@ -359,7 +360,11 @@ def check_cpa(config: dict, http_get: Callable) -> CheckResult:
 
 def run_connectivity_checks(config: dict, http_get: Callable, http_post: Callable) -> List[CheckResult]:
     results = []
-    proxy = resolve_proxy_url(config.get("proxy", ""))
+    # 连通性探测使用独立标识，避免依赖注册运行时的 thread-local，
+    # 并确保含 .xxx / .xxxx 占位符的代理可被解析。
+    identifier = "probe"
+    placeholder = str(config.get("proxy_placeholder", ".xxx") or ".xxx")
+    proxy = resolve_proxy_url(config.get("proxy", ""), identifier, placeholder)
     results.append(check_proxy(proxy, http_get))
     results.append(check_xai_signup(proxy, http_get))
     results.append(

@@ -28,6 +28,7 @@ from .account_exports import build_account_auth_archive, build_sso_archive, read
 from .jobs import job_coordinator
 from .relogin_jobs import relogin_coordinator
 from backend.shared.paths import DATA_ROOT, PROJECT_ROOT, STATIC_ROOT
+from backend.integrations import proxy_pool
 
 APP_DIR = PROJECT_ROOT
 DATA_DIR = DATA_ROOT
@@ -68,6 +69,7 @@ CONFIG_PUBLIC_KEYS = (
     "outlookemail_disable_after_cpa_success",
     "proxy",
     "proxy_placeholder",
+    "proxy_selection_mode",
     "enable_nsfw",
     "debug_mode",
     "browser_headless",
@@ -104,6 +106,7 @@ SENSITIVE_HINT_KEYS = {
     "outlookemail_web_password",
     "outlookemail_session_cookie",
     "cpa_management_key",
+    "proxy",
     "grok2api_remote_password",
     "mailnest_api_key",
     "yyds_api_key",
@@ -136,6 +139,17 @@ class LoginBody(BaseModel):
     username: str = ""
     password: str = ""
     confirm_password: str = ""
+
+
+class ProxyLinesBody(BaseModel):
+    lines: str = ""
+    urls: Optional[List[str]] = None
+
+
+class ProxyIdsBody(BaseModel):
+    ids: List[str] = Field(default_factory=list)
+    delay_ms: int = 200
+    min_fail_count: int = 1
 
 
 def _batch_account_ids(ids: List[int]) -> List[int]:
@@ -354,8 +368,13 @@ def _apply_config_updates(updates: Dict[str, Any]) -> Dict[str, Any]:
             if mode not in ("device_protocol", "device_browser", "auth_code"):
                 mode = "device_protocol"
             value = mode
+        elif key == "proxy_selection_mode":
+            value = str(value or "round_robin").strip().lower() or "round_robin"
+            if value not in {"round_robin", "random", "lowest_latency"}:
+                value = "round_robin"
         elif key in (
             "proxy",
+            "proxy_placeholder",
             "cpa_remote_url",
             "grok2api_remote_url",
             "outlookemail_api_base",
@@ -1114,6 +1133,79 @@ def create_app() -> FastAPI:
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"停止失败: {exc}") from exc
         return {"ok": True, "job": status}
+
+    @app.get("/api/proxies")
+    def api_proxies_list() -> Dict[str, Any]:
+        """列出代理池。"""
+        items = proxy_pool.list_proxies()
+        return {
+            "ok": True,
+            "items": [proxy_pool.public_proxy(p) for p in items],
+            "total": len(items),
+        }
+
+    @app.post("/api/proxies")
+    def api_proxies_add(body: ProxyLinesBody) -> Dict[str, Any]:
+        """批量添加代理（多行文本或 urls 数组）。"""
+        try:
+            if body.urls:
+                result = proxy_pool.add_proxies(body.urls)
+            else:
+                result = proxy_pool.add_proxies(body.lines or "")
+            items = proxy_pool.list_proxies()
+            return {
+                "ok": True,
+                **result,
+                "items": [proxy_pool.public_proxy(p) for p in items],
+            }
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"添加失败: {exc}") from exc
+
+    @app.post("/api/proxies/probe")
+    def api_proxies_probe(body: ProxyIdsBody) -> Dict[str, Any]:
+        """批量探测延迟。ids 为空则探测全部。"""
+        try:
+            delay_ms = max(0, min(int(body.delay_ms or 200), 5000))
+            ids = body.ids or None
+            result = proxy_pool.probe_proxies(ids=ids, delay_ms=delay_ms)
+            items = proxy_pool.list_proxies()
+            return {
+                "ok": True,
+                **result,
+                "items": [proxy_pool.public_proxy(p) for p in items],
+            }
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"探测失败: {exc}") from exc
+
+    @app.post("/api/proxies/delete")
+    def api_proxies_delete(body: ProxyIdsBody) -> Dict[str, Any]:
+        """按 ids 删除代理。"""
+        try:
+            deleted = proxy_pool.delete_proxies(body.ids or [])
+            items = proxy_pool.list_proxies()
+            return {
+                "ok": True,
+                "deleted": deleted,
+                "items": [proxy_pool.public_proxy(p) for p in items],
+                "total": len(items),
+            }
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"删除失败: {exc}") from exc
+
+    @app.post("/api/proxies/delete-failed")
+    def api_proxies_delete_failed(body: ProxyIdsBody) -> Dict[str, Any]:
+        """删除 status=failed 的代理。"""
+        try:
+            deleted = proxy_pool.delete_failed_proxies(body.min_fail_count or 1)
+            items = proxy_pool.list_proxies()
+            return {
+                "ok": True,
+                "deleted": deleted,
+                "items": [proxy_pool.public_proxy(p) for p in items],
+                "total": len(items),
+            }
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"删除失败: {exc}") from exc
 
     @app.post("/api/browser/kill-all")
     def api_browser_kill_all() -> Dict[str, Any]:

@@ -43,6 +43,7 @@ export const navigationGroups = [
       { to: "/settings/grok2api", label: "Grok2API", shortLabel: "Grok2API", icon: Cable },
       { to: "/settings/mail", label: "邮箱服务", shortLabel: "邮箱", icon: Mail },
       { to: "/settings/outlook", label: "Outlook 邮箱池", shortLabel: "Outlook", icon: Settings2 },
+      { to: "/settings/proxy-pool", label: "代理池", shortLabel: "代理", icon: ShieldCheck },
       { to: "/settings/config", label: "配置文件", shortLabel: "配置", icon: FileJson2 },
     ],
   },

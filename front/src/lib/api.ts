@@ -313,4 +313,42 @@ export const api = {
       "/api/connectivity",
       { method: "POST" }
     ),
+  proxies: {
+    list: () =>
+      request<{ ok: boolean; items: Array<any>; total?: number }>(
+        "/api/proxies"
+      ),
+    add: (data: { lines?: string; urls?: string[] }) =>
+      request<{ ok: boolean; result: any; items?: any[] }>(
+        "/api/proxies",
+        {
+          method: "POST",
+          body: JSON.stringify(data),
+        }
+      ),
+    probe: (data: { ids?: string[]; delay_ms?: number } = {}) =>
+      request<{ ok: boolean; result: any; items?: any[] }>(
+        "/api/proxies/probe",
+        {
+          method: "POST",
+          body: JSON.stringify(data),
+        }
+      ),
+    delete: (ids: string[]) =>
+      request<{ ok: boolean; deleted: number; items?: any[]; total?: number }>(
+        "/api/proxies/delete",
+        {
+          method: "POST",
+          body: JSON.stringify({ ids }),
+        }
+      ),
+    deleteFailed: (data: { min_fail_count?: number } = {}) =>
+      request<{ ok: boolean; deleted: number; items?: any[]; total?: number }>(
+        "/api/proxies/delete-failed",
+        {
+          method: "POST",
+          body: JSON.stringify(data),
+        }
+      ),
+  },
 };

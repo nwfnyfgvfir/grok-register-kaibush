@@ -42,6 +42,7 @@ from backend.registration import signup_flow as _rf
 from backend.integrations import network_checks as _conn
 from backend.registration.store import RegistrationRepository
 from backend.integrations.proxy import resolve_proxy_url
+from backend.integrations.proxy_pool import load_pool, pick_proxy
 from backend.shared.paths import DATA_ROOT, PROJECT_ROOT
 from backend.automation.session import (
     browser,
@@ -194,6 +195,8 @@ DEFAULT_CONFIG = {
     "outlookemail_disable_after_cpa_success": False,
     "proxy": "http://Default.xxx:pass@127.0.0.1:2260",
     "proxy_placeholder": ".xxx",
+    "proxies": [],
+    "proxy_selection_mode": "round_robin",
     "enable_nsfw": True,
     "debug_mode": False,
     "browser_headless": False,
@@ -650,9 +653,27 @@ DUCKMAIL_API_BASE_DEFAULT = duckmail_provider.API_BASE_DEFAULT
 
 
 def get_proxies(email: str = ""):
+    """优先从代理池挑选可用代理；池为空时回退到 config.proxy（含占位符）。
+
+    返回 dict: {"http": url, "https": url} 或 {}。
+    """
+    strategy = str(config.get("proxy_selection_mode", "round_robin") or "round_robin").strip().lower()
+    if strategy not in {"round_robin", "random", "lowest_latency"}:
+        strategy = "round_robin"
+
     identifier = current_proxy_identifier(email)
     placeholder = str(config.get("proxy_placeholder", ".xxx") or ".xxx")
-    proxy = resolve_proxy_url(config.get("proxy", ""), identifier, placeholder)
+
+    raw_url = ""
+    if load_pool():
+        picked = pick_proxy(strategy=strategy)
+        if isinstance(picked, dict):
+            raw_url = str(picked.get("url") or "").strip()
+
+    if not raw_url:
+        raw_url = str(config.get("proxy", "") or "").strip()
+
+    proxy = resolve_proxy_url(raw_url, identifier, placeholder) if raw_url else ""
     if proxy:
         return {"http": proxy, "https": proxy}
     return {}
