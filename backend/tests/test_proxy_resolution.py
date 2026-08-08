@@ -65,15 +65,17 @@ class DockerProxyResolutionTests(unittest.TestCase):
                 "http://Default.C:pass@127.0.0.1:2260",
             )
 
-    def test_probe_identifier_for_connectivity(self):
+    def test_realtime_identifier_for_connectivity(self):
+        """Connectivity probe now uses a realtime sticky id, not fixed 'probe'."""
         with mock.patch.dict("os.environ", {}, clear=True):
+            ident = "a1b2c3d4e5f60718"
             self.assertEqual(
                 resolve_proxy_url(
                     "http://Default.xxx:pass@127.0.0.1:2260",
-                    identifier=secrets.token_hex(8),
+                    identifier=ident,
                     placeholder=".xxx",
                 ),
-                f"http://Default.{secrets.token_hex(8)}:pass@127.0.0.1:2260",
+                f"http://Default.{ident}:pass@127.0.0.1:2260",
             )
 
     def test_xxxx_fallback_when_placeholder_is_xxx(self):
