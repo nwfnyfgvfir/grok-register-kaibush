@@ -10,6 +10,7 @@ import {
   PlaySquare,
   RefreshCcw,
   Settings2,
+  ShieldCheck,
   SlidersHorizontal,
   Users,
 } from "lucide-react";
