@@ -697,6 +697,7 @@ def cloudflare_create_temp_address(api_base):
         auth_mode=get_cloudflare_auth_mode(),
         custom_auth=get_cloudflare_custom_auth(),
         name=generate_username(10),
+        random_subdomain=True,
     )
 
 

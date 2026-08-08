@@ -9,6 +9,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from backend.mailbox.utilities import (
     extract_verification_code,
+    generate_random_subdomain,
     generate_username,
     pick_list_payload,
     strip_html,
@@ -78,11 +79,16 @@ def create_temp_address(
     auth_mode: str = "none",
     custom_auth: str = "",
     name: str = "",
+    random_subdomain: bool = False,
 ) -> tuple[str, str]:
     path = accounts_path if accounts_path.startswith("/") else f"/{accounts_path}"
     url = f"{api_base.rstrip('/')}{path}"
     if is_admin_create_path(path):
-        payload = {"name": name or generate_username(10), "enablePrefix": True}
+        if random_subdomain:
+            subdomain = generate_random_subdomain(8)
+            payload = {"name": subdomain, "enablePrefix": True}
+        else:
+            payload = {"name": name or generate_username(10), "enablePrefix": True}
         if domain:
             payload["domain"] = domain
         headers = build_headers(api_key, auth_mode, custom_auth, content_type=True)

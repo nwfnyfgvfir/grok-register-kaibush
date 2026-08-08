@@ -13,6 +13,12 @@ def generate_username(length: int = 10) -> str:
     return "".join(secrets.choice(chars) for _ in range(max(3, length)))
 
 
+def generate_random_subdomain(length: int = 8) -> str:
+    """Generate a random subdomain string (lowercase letters + digits, used for temp email addresses)."""
+    chars = string.ascii_lowercase + string.digits
+    return "".join(secrets.choice(chars) for _ in range(length))
+
+
 def pick_list_payload(data: Any) -> List[dict]:
     if isinstance(data, list):
         return [item for item in data if isinstance(item, dict)]
