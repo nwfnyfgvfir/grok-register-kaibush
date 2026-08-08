@@ -67,6 +67,7 @@ CONFIG_PUBLIC_KEYS = (
     "outlookemail_pick_mode",
     "outlookemail_disable_after_cpa_success",
     "proxy",
+    "proxy_placeholder",
     "enable_nsfw",
     "debug_mode",
     "browser_headless",

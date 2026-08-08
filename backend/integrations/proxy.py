@@ -21,13 +21,16 @@ def resolve_proxy_url(proxy_url: str, identifier: str = "", placeholder: str = "
     if not value:
         return value
 
-    # Replace identifier placeholder for per-account unique proxy
+    # Replace identifier placeholder for per-account unique proxy.
+    # Handle both .xxx and {id} styles, and ensure correct leading dot.
     if identifier:
         ph = str(placeholder or ".xxx").strip() or ".xxx"
-        if ph in value:
-            value = value.replace(ph, f".{identifier}")
-        elif "{id}" in value.lower():
+        if ph == ".xxx":
+            value = value.replace(".xxx", f".{identifier}")
+        elif ph == "{id}":
             value = value.replace("{id}", identifier)
+        elif ph in value:
+            value = value.replace(ph, f".{identifier}")
         elif ".xxx" in value:
             value = value.replace(".xxx", f".{identifier}")
 

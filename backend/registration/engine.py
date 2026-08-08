@@ -552,10 +552,59 @@ def generate_account_identifier(email: str) -> str:
     Uses email hash for consistency across retries/SSO flows.
     """
     if not email:
-        import secrets
         return secrets.token_hex(8)
     import hashlib
     return hashlib.sha256(email.encode("utf-8")).hexdigest()[:16]
+
+
+# Thread-local proxy identifier: allocated before browser start so browser + CPA
+# share the same sticky proxy for one registration attempt.
+_proxy_runtime = threading.local()
+
+
+def allocate_proxy_identifier(seed: str = "") -> str:
+    """Allocate identifier for this registration attempt before browser start."""
+    if seed:
+        ident = generate_account_identifier(seed)
+    else:
+        ident = secrets.token_hex(8)
+    _proxy_runtime.identifier = ident
+    return ident
+
+
+def current_proxy_identifier(email: str = "") -> str:
+    """Return the attempt identifier, falling back to email-hash if needed."""
+    ident = str(getattr(_proxy_runtime, "identifier", "") or "").strip()
+    if ident:
+        return ident
+    if email:
+        return generate_account_identifier(email)
+    return ""
+
+
+def clear_proxy_identifier() -> None:
+    """Clear the attempt identifier (call in finally after each attempt)."""
+    _proxy_runtime.identifier = ""
+
+
+def _mask_proxy_for_log(proxy: str) -> str:
+    """Mask credentials in proxy URL for safe logging."""
+    value = str(proxy or "").strip()
+    if not value or "@" not in value:
+        return value
+    try:
+        # scheme://user:pass@host:port → scheme://***@host:port
+        if "://" in value:
+            scheme, rest = value.split("://", 1)
+            if "@" in rest:
+                _, hostpart = rest.rsplit("@", 1)
+                return f"{scheme}://***@{hostpart}"
+        if "@" in value:
+            _, hostpart = value.rsplit("@", 1)
+            return f"***@{hostpart}"
+    except Exception:
+        pass
+    return value
 
 
 def parse_account_interval() -> float:
@@ -601,7 +650,7 @@ DUCKMAIL_API_BASE_DEFAULT = duckmail_provider.API_BASE_DEFAULT
 
 
 def get_proxies(email: str = ""):
-    identifier = generate_account_identifier(email) if email else ""
+    identifier = current_proxy_identifier(email)
     placeholder = str(config.get("proxy_placeholder", ".xxx") or ".xxx")
     proxy = resolve_proxy_url(config.get("proxy", ""), identifier, placeholder)
     if proxy:
@@ -994,7 +1043,7 @@ def _normalize_sso_token(raw_token):
 
 def _resolve_cpa_proxy(email: str = ""):
     """CPA 换 token 用的代理：优先 config.proxy，其次环境变量，否则直连。"""
-    identifier = generate_account_identifier(email) if email else ""
+    identifier = current_proxy_identifier(email)
     placeholder = str(config.get("proxy_placeholder", ".xxx") or ".xxx")
     proxy = resolve_proxy_url(config.get("proxy", ""), identifier, placeholder)
     if proxy:
@@ -2469,6 +2518,21 @@ def run_registration(count):
                     }
                     nsfw_status = "未执行"
                     try:
+                        # Allocate sticky proxy id before browser traffic for this attempt.
+                        proxy_id = allocate_proxy_identifier()
+                        resolved = _resolve_cpa_proxy()
+                        registration_log(
+                            f"[W{wid+1}] [*] 代理标识: {proxy_id}"
+                            + (f" → {_mask_proxy_for_log(resolved)}" if resolved else " → 直连")
+                        )
+                        # Boot start_browser may have launched without id; force restart
+                        # so Camoufox picks up the attempt-specific proxy.
+                        if _active_browser() is not None:
+                            try:
+                                stop_browser()
+                                time.sleep(0.2)
+                            except Exception:
+                                pass
                         open_signup_page(
                             log_callback=lambda m: registration_log(f"[W{wid+1}] {m}"),
                             cancel_callback=controller.should_stop,
@@ -2699,6 +2763,7 @@ def run_registration(count):
                         )
                         registration_log(f"[W{wid+1}] [-] 失败 [{FAIL_LABELS.get(kind, kind)}]: {exc}")
                     finally:
+                        clear_proxy_identifier()
                         if i < n and not controller.should_stop():
                             try:
                                 stop_browser()
@@ -2706,6 +2771,7 @@ def run_registration(count):
                             except Exception:
                                 pass
             finally:
+                clear_proxy_identifier()
                 try:
                     maybe_stop_browser(
                         user_stopped=bool(controller.should_stop()),
@@ -2773,6 +2839,22 @@ def run_registration(count):
             }
             nsfw_status = "未执行"
             try:
+                # Allocate sticky proxy id once per account attempt (before browser).
+                # Mail retries reuse the same id so sticky proxy stays stable.
+                proxy_id = allocate_proxy_identifier()
+                resolved = _resolve_cpa_proxy()
+                registration_log(
+                    f"[*] 代理标识: {proxy_id}"
+                    + (f" → {_mask_proxy_for_log(resolved)}" if resolved else " → 直连")
+                )
+                # Boot start_browser may have launched without id; force restart
+                # so Camoufox picks up the attempt-specific proxy.
+                if _active_browser() is not None:
+                    try:
+                        stop_browser()
+                        time.sleep(0.2)
+                    except Exception:
+                        pass
                 dev_token = ""
                 code = ""
                 mail_ok = False
@@ -3041,6 +3123,7 @@ def run_registration(count):
                 )
                 registration_log(f"[-] 注册失败 [{FAIL_LABELS.get(kind, kind)}]: {exc}")
             finally:
+                clear_proxy_identifier()
                 if controller.should_stop():
                     break
                 # 每轮结束只关浏览器，不立刻再开。
@@ -3066,6 +3149,7 @@ def run_registration(count):
     except Exception as exc:
         registration_log(f"[!] 任务异常: {exc}")
     finally:
+        clear_proxy_identifier()
         try:
             user_stopped = bool(controller.should_stop())
             if user_stopped:
