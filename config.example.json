@@ -12,6 +12,7 @@
   "cloudflare_path_accounts": "/api/new_address",
   "cloudflare_path_token": "/api/token",
   "cloudflare_path_messages": "/api/mails",
+  "cloudflare_enable_random_subdomain": true,
   "outlookemail_api_base": "",
   "outlookemail_api_key": "",
   "outlookemail_source": "accounts",

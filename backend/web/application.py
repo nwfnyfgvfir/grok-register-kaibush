@@ -54,6 +54,7 @@ CONFIG_PUBLIC_KEYS = (
     "cloudflare_path_accounts",
     "cloudflare_path_token",
     "cloudflare_path_messages",
+    "cloudflare_enable_random_subdomain",
     "outlookemail_api_base",
     "outlookemail_api_key",
     "outlookemail_source",

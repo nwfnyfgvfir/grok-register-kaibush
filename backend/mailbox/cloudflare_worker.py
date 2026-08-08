@@ -81,30 +81,51 @@ def create_temp_address(
     name: str = "",
     random_subdomain: bool = False,
 ) -> tuple[str, str]:
+    """创建临时邮箱地址。
+
+    对齐 dreamhunter2333/cloudflare_temp_email：
+    - 标准路径 POST /api/new_address：支持 name/domain/enableRandomSubdomain
+    - 管理路径 POST /admin/new_address：支持 name + enablePrefix
+    """
     path = accounts_path if accounts_path.startswith("/") else f"/{accounts_path}"
     url = f"{api_base.rstrip('/')}{path}"
+    address_name = name or generate_username(10)
+    if random_subdomain:
+        # 本地先生成随机前缀；同时把 enableRandomSubdomain 传给 Worker，
+        # 让服务端在支持的域名上创建随机二级子域名邮箱。
+        address_name = generate_random_subdomain(8)
+
     if is_admin_create_path(path):
-        if random_subdomain:
-            subdomain = generate_random_subdomain(8)
-            payload = {"name": subdomain, "enablePrefix": True}
-        else:
-            payload = {"name": name or generate_username(10), "enablePrefix": True}
+        payload = {"name": address_name, "enablePrefix": True}
         if domain:
             payload["domain"] = domain
+        if random_subdomain:
+            payload["enableRandomSubdomain"] = True
         headers = build_headers(api_key, auth_mode, custom_auth, content_type=True)
     else:
-        payload = {}
+        # 标准 /api/new_address：参考 cloudflare_temp_email 的 createNewAddress payload
+        payload: Dict[str, Any] = {
+            "name": address_name,
+            "enableRandomSubdomain": bool(random_subdomain),
+        }
         if domain:
             payload["domain"] = domain
         headers = apply_custom_auth({"Content-Type": "application/json"}, custom_auth)
+        # 部分部署用 admin auth / api key 访问标准路径，补齐鉴权头
+        if api_key or auth_mode not in ("", "none"):
+            headers = build_headers(api_key, auth_mode, custom_auth, content_type=True)
+
     resp = http_post(url, json=payload, headers=headers)
     resp.raise_for_status()
     try:
         data = resp.json()
     except Exception:
         raise Exception(f"Cloudflare {path} 返回非JSON: {resp.text[:300]}")
-    address = data.get("address")
-    jwt = data.get("jwt")
+    # 兼容 {address, jwt} 与 {success, data: {address, jwt}} 两种返回
+    if isinstance(data, dict) and isinstance(data.get("data"), dict):
+        data = data["data"]
+    address = data.get("address") if isinstance(data, dict) else None
+    jwt = data.get("jwt") if isinstance(data, dict) else None
     if not address or not jwt:
         raise Exception(f"Cloudflare {path} 缺少 address/jwt: {data}")
     return address, jwt
