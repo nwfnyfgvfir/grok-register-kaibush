@@ -315,6 +315,82 @@ def classify_failure(exc) -> str:
     return FAIL_OTHER
 
 
+def is_proxy_or_cf_failure(exc) -> bool:
+    """判断是否为代理 / Cloudflare 相关失败，适合换标识重试当前槽位且不占失败计数。
+
+    明确排除：取消、域名拒绝、已注册、风控、验证码超时、CPA 等非出口问题。
+    """
+    if isinstance(
+        exc,
+        (
+            RegistrationCancelled,
+            EmailDomainRejected,
+            RegistrationRiskDenied,
+            _rf.AccountAlreadyRegistered,
+        ),
+    ):
+        return False
+    # 卡住重试由 AccountRetryNeeded 自己的槽位重试处理，这里不抢
+    if isinstance(exc, AccountRetryNeeded):
+        return False
+
+    msg = str(exc or "")
+    low = msg.lower()
+
+    # 验证码 / CPA / 风控文案优先排除，避免误判
+    if (
+        "未收到验证码" in msg
+        or "验证码阶段失败" in msg
+        or ("验证码" in msg and "失败" in msg)
+        or "[cpa]" in low
+        or ("cpa" in low and ("失败" in msg or "跳过" in msg))
+        or "sso_timeout" in low
+        or "未获取到 sso" in msg
+    ):
+        return False
+
+    cf_markers = (
+        "cloudflare",
+        "just a moment",
+        "checking your browser",
+        "__cf_chl",
+        "cf-error",
+        "cf_challenge",
+        "cf_clearance",
+        "仍停留在 cloudflare",
+        "被 cloudflare",
+    )
+    proxy_markers = (
+        "请更换当前 proxy",
+        "更换当前 proxy",
+        "proxy precheck",
+        "代理预检查",
+        "出站探测失败",
+        "tcp 通，出站",
+        "无法连接代理",
+        "proxy error",
+        "proxy refused",
+        "proxy connection",
+        "tunnel connection failed",
+        "err_proxy",
+        "err_tunnel",
+    )
+    if any(m in low for m in cf_markers) or any(m in low for m in proxy_markers):
+        return True
+    # 中文 Cloudflare / 代理拦截常见表述
+    if "cloudflare" in msg or "Cloudflare" in msg:
+        return True
+    if "代理" in msg and any(k in msg for k in ("失败", "拦截", "不可用", "超时", "无法", "拒绝")):
+        return True
+    if "拦截" in msg and any(k in low for k in ("xai", "accounts.x.ai", "sign-up", "signup", "403", "429", "503")):
+        return True
+    return False
+
+
+# 中间账号 CF/代理失败时，换标识重试当前槽位的上限（不占失败计数）
+MAX_PROXY_SLOT_RETRIES = 5
+
+
 def empty_fail_stats():
     return {k: 0 for k in FAIL_LABELS}
 
@@ -2416,6 +2492,7 @@ def run_registration(count):
     fail_stats = empty_fail_stats()
     batch_id = new_registration_batch_id("web")
     retry_count_for_slot = 0
+    proxy_retry_for_slot = 0
     max_slot_retry = 3
     accounts_output_file = ""  # 已改为按邮箱单独保存，不再使用批量文件
     workers = max(1, min(int(config.get("register_workers", 1) or 1), 8, int(count or 1)))
@@ -2440,17 +2517,49 @@ def run_registration(count):
         _cleanup_stale_profiles(log_callback=registration_log)
     except Exception:
         pass
-    try:
-        startup_checks = _conn.run_connectivity_checks(
-            config, http_get, http_post, identifier=probe_proxy_id
-        )
-        for name, ok, detail in startup_checks:
-            registration_log(f"[检查] [{'OK' if ok else 'FAIL'}] {name}: {detail}")
-        if _conn.has_blocking_xai_failure(startup_checks):
-            registration_log("[!] xAI 注册页被 Cloudflare 拦截，已停止建号；请更换当前 proxy 后重试")
-            return
-    except Exception as exc:
-        registration_log(f"[!] 启动连通性检查异常，继续注册: {exc}")
+
+    # 代理预检查失败时：直接更换新的代理标识重新注册（符合用户指定规则）
+    # 若首个账号前预检查失败，或中间某个注册任务预检查失败，均采用相同处理方式
+    proxy_retry = True
+    proxy_retry_count = 0
+    while proxy_retry and proxy_retry_count < MAX_PROXY_SLOT_RETRIES:
+        proxy_retry_count += 1
+        try:
+            startup_checks = _conn.run_connectivity_checks(
+                config, http_get, http_post, identifier=probe_proxy_id
+            )
+            for name, ok, detail in startup_checks:
+                registration_log(f"[检查] [{'OK' if ok else 'FAIL'}] {name}: {detail}")
+            if _conn.has_blocking_xai_failure(startup_checks):
+                registration_log("[!] xAI 注册页被 Cloudflare 拦截，已停止建号；请更换当前 proxy 后重试")
+                # 检查是否代理相关失败
+                is_proxy_fail = any(
+                    not ok and ("proxy" in name.lower() or "xai" in name.lower())
+                    for name, ok, _ in startup_checks
+                )
+                if is_proxy_fail:
+                    new_id = allocate_proxy_identifier()
+                    registration_log(
+                        f"[*] 代理预检查失败，更换新的代理标识重新注册任务"
+                        f" ({proxy_retry_count}/{MAX_PROXY_SLOT_RETRIES}): {new_id}"
+                    )
+                    # 重新分配标识，继续下一轮重试（不会终止后续账号）
+                    probe_proxy_id = new_id
+                    proxy_retry = True
+                    continue
+                else:
+                    registration_log("[!] 非代理相关阻断失败，停止任务")
+                    return
+            else:
+                # 预检查通过，退出重试循环
+                proxy_retry = False
+        except Exception as exc:
+            registration_log(f"[!] 启动连通性检查异常，继续注册: {exc}")
+            proxy_retry = False
+    # 重试次数用尽且仍未通过
+    if proxy_retry:
+        registration_log("[!] 代理预检查重试次数超过限制，停止任务")
+        return
 
     def _record_failure(exc):
         nonlocal fail_count
@@ -2543,6 +2652,7 @@ def run_registration(count):
                     return
                 i = 0
                 retry = 0
+                proxy_retry = 0
                 while i < n and not controller.should_stop():
                     attempt_started_at = time.time()
                     email = ""
@@ -2556,6 +2666,7 @@ def run_registration(count):
                     nsfw_status = "未执行"
                     try:
                         # 每轮账号：若上一轮 finally 已 clear，则重新分配；首轮复用 boot 标识
+                        # CF/代理失败重试时 finally 会 clear，此处自动拿到新 sticky id
                         existing = current_proxy_identifier()
                         if existing:
                             proxy_id = existing
@@ -2631,6 +2742,7 @@ def run_registration(count):
                             local_fail += 1
                             i += 1
                             retry = 0
+                            proxy_retry = 0
                             # xAI 侧账号通常已创建，按自动停用开关尝试停用 Outlook 邮箱，避免下次再取到同一邮箱。
                             email_disable_detail = (
                                 disable_outlookemail_consumed(
@@ -2672,6 +2784,7 @@ def run_registration(count):
                             local_success += 1
                             i += 1
                             retry = 0
+                            proxy_retry = 0
                             if cpa_ok:
                                 registration_log(f"[W{wid+1}] [+] 注册成功: {email}")
                             else:
@@ -2711,6 +2824,7 @@ def run_registration(count):
                         local_fail += 1
                         i += 1
                         retry = 0
+                        proxy_retry = 0
                         _persist_result(
                             started_at=attempt_started_at,
                             worker_id=wid,
@@ -2732,6 +2846,7 @@ def run_registration(count):
                             local_fail += 1
                             i += 1
                             retry = 0
+                            proxy_retry = 0
                             _persist_result(
                                 started_at=attempt_started_at,
                                 worker_id=wid,
@@ -2748,11 +2863,23 @@ def run_registration(count):
                             )
                             registration_log(f"[W{wid+1}] [-] 卡住跳过: {exc}")
                     except Exception as exc:
+                        # 中间账号 CF/代理失败：换新标识重试当前槽位，不占失败计数
+                        # finally 会 clear 标识并关浏览器；下一轮循环重新 allocate 新 sticky id
+                        if is_proxy_or_cf_failure(exc) and proxy_retry < MAX_PROXY_SLOT_RETRIES:
+                            proxy_retry += 1
+                            registration_log(
+                                f"[W{wid+1}] [!] CF/代理失败，更换新代理标识重试当前槽位"
+                                f" ({proxy_retry}/{MAX_PROXY_SLOT_RETRIES})，不占失败计数: {exc}"
+                            )
+                            # 不增加 i / local_fail，不写失败结果
+                            continue
                         kind = classify_failure(exc)
                         local_fail_stats[kind] = local_fail_stats.get(kind, 0) + 1
                         local_fail += 1
                         i += 1
                         retry = 0
+                        proxy_retries_used = proxy_retry
+                        proxy_retry = 0
                         if kind == FAIL_RISK:
                             cpa_detail.update(status="rejected", error=str(exc))
                         fail_email = current_attempt_email(email, exc)
@@ -2780,6 +2907,9 @@ def run_registration(count):
                                     f"[W{wid+1}] [!] 账号已注册：Outlook 邮箱停用失败: {fail_email}"
                                     f" — {(email_disable_detail or {}).get('error') or ''}"
                                 )
+                        extra_data = {"任务序号": i, "并发数": workers}
+                        if is_proxy_or_cf_failure(exc) and proxy_retries_used:
+                            extra_data["代理重试次数"] = proxy_retries_used
                         _persist_result(
                             started_at=attempt_started_at,
                             worker_id=wid,
@@ -2793,6 +2923,7 @@ def run_registration(count):
                             account_file=email_file,
                             sso_saved=bool(email_file) or bool(sso and kind == FAIL_RISK),
                             nsfw_status=nsfw_status,
+                            extra=extra_data,
                         )
                         registration_log(f"[W{wid+1}] [-] 失败 [{FAIL_LABELS.get(kind, kind)}]: {exc}")
                     finally:
@@ -2993,6 +3124,7 @@ def run_registration(count):
                     reason = cpa_failure_reason(cpa_detail)
                     _record_failure(RuntimeError(f"[CPA] {reason}"))
                     retry_count_for_slot = 0
+                    proxy_retry_for_slot = 0
                     i += 1
                     email_disable_detail = (
                         disable_outlookemail_consumed(
@@ -3029,6 +3161,7 @@ def run_registration(count):
                     success_count += 1
                     counted_success = True
                     retry_count_for_slot = 0
+                    proxy_retry_for_slot = 0
                     i += 1
                     if cpa_ok:
                         registration_log(f"[+] 注册成功: {email}")
@@ -3076,6 +3209,7 @@ def run_registration(count):
             except EmailDomainRejected as exc:
                 kind = _record_failure(exc)
                 retry_count_for_slot = 0
+                proxy_retry_for_slot = 0
                 i += 1
                 _persist_result(
                     started_at=attempt_started_at,
@@ -3099,6 +3233,7 @@ def run_registration(count):
                     retry_used = retry_count_for_slot
                     kind = _record_failure(exc)
                     retry_count_for_slot = 0
+                    proxy_retry_for_slot = 0
                     i += 1
                     _persist_result(
                         started_at=attempt_started_at,
@@ -3115,8 +3250,19 @@ def run_registration(count):
                     )
                     registration_log(f"[-] 当前账号已达到最大重试次数，跳过 [{FAIL_LABELS.get(kind, kind)}]: {exc}")
             except Exception as exc:
+                # 中间账号 CF/代理失败：换新标识重试当前槽位，不占失败计数
+                if is_proxy_or_cf_failure(exc) and proxy_retry_for_slot < MAX_PROXY_SLOT_RETRIES:
+                    proxy_retry_for_slot += 1
+                    registration_log(
+                        f"[!] CF/代理失败，更换新代理标识重试当前槽位"
+                        f" ({proxy_retry_for_slot}/{MAX_PROXY_SLOT_RETRIES})，不占失败计数: {exc}"
+                    )
+                    # 不增加 i / fail_count，不写失败结果；finally 清标识并关浏览器后下一轮重试
+                    continue
                 kind = _record_failure(exc)
                 retry_count_for_slot = 0
+                proxy_retries_used = proxy_retry_for_slot
+                proxy_retry_for_slot = 0
                 i += 1
                 if kind == FAIL_RISK:
                     cpa_detail.update(status="rejected", error=str(exc))
@@ -3145,6 +3291,9 @@ def run_registration(count):
                             f"[!] 账号已注册：Outlook 邮箱停用失败: {fail_email}"
                             f" — {(email_disable_detail or {}).get('error') or ''}"
                         )
+                extra_data = {"任务序号": i, "并发数": 1}
+                if is_proxy_or_cf_failure(exc) and proxy_retries_used:
+                    extra_data["代理重试次数"] = proxy_retries_used
                 _persist_result(
                     started_at=attempt_started_at,
                     email=fail_email,
@@ -3157,6 +3306,7 @@ def run_registration(count):
                     account_file=email_file,
                     sso_saved=bool(email_file) or bool(sso and kind == FAIL_RISK),
                     nsfw_status=nsfw_status,
+                    extra=extra_data,
                 )
                 registration_log(f"[-] 注册失败 [{FAIL_LABELS.get(kind, kind)}]: {exc}")
             finally:
@@ -3167,10 +3317,17 @@ def run_registration(count):
                 # 下一轮 open_signup_page 会按需启动并导航到官网，避免空浏览器残留。
                 if i >= count:
                     continue
-                # 账号间随机间隔
+                # 账号间随机间隔；CF/代理槽位重试时缩短等待，避免拖慢恢复
                 wait_sec = parse_account_interval()
+                is_proxy_slot_retry = proxy_retry_for_slot > 0 and retry_count_for_slot == 0
+                if is_proxy_slot_retry:
+                    # finally 在 except-continue 之后仍会执行：缩短间隔并区分日志
+                    wait_sec = min(wait_sec, 3.0) if wait_sec > 0 else 0.5
                 if wait_sec > 0:
-                    registration_log(f"[*] 下一个账号前等待 {wait_sec:.0f} 秒...")
+                    if is_proxy_slot_retry:
+                        registration_log(f"[*] 代理换标识重试当前槽位前等待 {wait_sec:.0f} 秒...")
+                    else:
+                        registration_log(f"[*] 下一个账号前等待 {wait_sec:.0f} 秒...")
                     sleep_with_cancel(wait_sec, controller.should_stop)
                 try:
                     stop_browser()
